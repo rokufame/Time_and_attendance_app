@@ -267,7 +267,25 @@
     #dlg-msg { min-height: 1.4rem; margin: 10px 0 0; font-size: .85rem; font-weight: 700; color: #a12a2a; }
     .empty { color: var(--sub); font-size: .9rem; margin: 0 0 10px; }
     .close-row { text-align: right; margin-top: 8px; }
- 
+
+    /* ---------- 時間ごとの予定 ---------- */
+    .schedule-section { margin-top: 20px; padding-top: 18px; border-top: 2px dotted #c7d3e0; }
+    .schedule-section h3 { margin: 0 0 10px; font-size: 1rem; font-weight: 900; }
+    .schedule-item { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 12px; margin-bottom: 8px; border-radius: 12px; background: var(--panel); }
+    .schedule-item .schedule-times { font-weight: 900; color: var(--in-dark); font-variant-numeric: tabular-nums; }
+    .schedule-item textarea, .schedule-form textarea { width: 100%; min-height: 56px; resize: vertical; font: inherit; padding: 9px 10px; border: 1px solid #c7d3e0; border-radius: 10px; }
+    .schedule-item .schedule-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .schedule-form { padding: 12px; background: #f7f9fc; border-radius: 12px; margin-top: 10px; }
+    .schedule-form .row { margin-bottom: 8px; }
+    .schedule-form input[type="time"] { min-width: 0; }
+    .schedule-empty { color: var(--sub); font-size: .85rem; margin: 8px 0; }
+    /* ---------- 振り返り ---------- */
+    .reflection-section { margin-top: 20px; padding-top: 18px; border-top: 2px dotted #c7d3e0; }
+    .reflection-section h3 { margin: 0 0 10px; font-size: 1rem; font-weight: 900; }
+    .reflection-field { margin: 12px 0; }
+    .reflection-field label { display: block; margin-bottom: 5px; font-size: .85rem; font-weight: 700; color: var(--sub); }
+    .reflection-field textarea { width: 100%; min-height: 68px; resize: vertical; font: inherit; padding: 10px; border: 1px solid #c7d3e0; border-radius: 10px; }
+
     @media (max-width: 520px) {
       body { padding: 14px; }
       .slip { padding: 32px 14px 22px; }
@@ -341,6 +359,48 @@
         <button id="add-btn" class="mini primary">追加</button>
       </div>
     </div>
+
+    <div class="schedule-section">
+      <h3>この日の時間ごとの予定</h3>
+      <div id="schedule-list"></div>
+      <div class="schedule-form">
+        <p style="margin:0 0 8px;font-size:.85rem;font-weight:700;color:var(--sub)">予定を追加する</p>
+        <div class="row">
+          <input id="schedule-start" type="time" aria-label="開始時刻" value="09:00">
+          <span>〜</span>
+          <input id="schedule-end" type="time" aria-label="終了時刻" value="10:00">
+        </div>
+        <textarea id="schedule-content" placeholder="例：Pythonの勉強、買い物、会議など"></textarea>
+        <div style="text-align:right;margin-top:8px">
+          <button id="schedule-add" class="mini primary">予定を追加</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="reflection-section">
+      <h3>この日の振り返り</h3>
+      <div class="reflection-field">
+        <label for="reflection-achievements">今日の成果</label>
+        <textarea id="reflection-achievements" placeholder="今日できたこと・達成したこと"></textarea>
+      </div>
+      <div class="reflection-field">
+        <label for="reflection-good">良かったこと</label>
+        <textarea id="reflection-good" placeholder="うまくいったこと・続けたいこと"></textarea>
+      </div>
+      <div class="reflection-field">
+        <label for="reflection-improvements">改善点・課題</label>
+        <textarea id="reflection-improvements" placeholder="困ったこと・次に改善したいこと"></textarea>
+      </div>
+      <div class="reflection-field">
+        <label for="reflection-tomorrow">明日やること</label>
+        <textarea id="reflection-tomorrow" placeholder="次に取る具体的な行動"></textarea>
+      </div>
+      <div style="text-align:right">
+        <button id="reflection-save" class="mini primary">振り返りを保存</button>
+      </div>
+      <p id="reflection-updated" class="schedule-empty"></p>
+    </div>
+
     <p id="dlg-msg" aria-live="polite"></p>
     <div class="close-row"><button id="dlg-close" class="mini">閉じる</button></div>
   </dialog>
@@ -517,7 +577,7 @@
       setMsg("");
       $("add-time").value = "";
       dlg.showModal();
-      await loadDay();
+      await Promise.all([loadDay(), loadSchedules(), loadReflection()]);
     }
  
     async function loadDay() {
@@ -545,6 +605,112 @@
         : "出勤と退勤がそろうと、勤務時間が出ます";
     }
  
+    const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[ch]));
+
+    const REFLECTION_FIELDS = {
+      achievements: "reflection-achievements",
+      good_points: "reflection-good",
+      improvements: "reflection-improvements",
+      tomorrow: "reflection-tomorrow"
+    };
+
+    async function loadReflection() {
+      const r = await api("GET", "/api/reflection?date=" + dlgDate);
+      if (!r.ok) {
+        $("reflection-updated").textContent = "振り返りを読み込めませんでした";
+        return;
+      }
+      const data = r.data.reflection;
+      for (const [key, id] of Object.entries(REFLECTION_FIELDS)) {
+        $(id).value = data[key] || "";
+      }
+      $("reflection-updated").textContent = data.updated_at
+        ? `最終保存：${data.updated_at}`
+        : "まだ振り返りは保存されていません";
+    }
+
+    $("reflection-save").addEventListener("click", async () => {
+      const payload = { date: dlgDate };
+      for (const [key, id] of Object.entries(REFLECTION_FIELDS)) {
+        payload[key] = $(id).value;
+      }
+      const r = await api("POST", "/api/reflection", payload);
+      if (!r.ok) {
+        setMsg(r.data.message || "振り返りを保存できませんでした");
+        return;
+      }
+      $("reflection-updated").textContent = `最終保存：${r.data.updated_at}`;
+      setMsg(r.data.message);
+    });
+
+    async function loadSchedules() {
+      const box = $("schedule-list");
+      const r = await api("GET", "/api/schedules?date=" + dlgDate);
+      if (!r.ok) {
+        box.innerHTML = '<p class="err">予定を読み込めませんでした</p>';
+        return;
+      }
+      const schedules = r.data.schedules;
+      box.innerHTML = schedules.length ? schedules.map((item) => `
+        <div class="schedule-item" data-schedule-id="${item.id}">
+          <div class="schedule-times">${escapeHtml(item.start_time)}〜${escapeHtml(item.end_time)}</div>
+          <div>
+            <div style="font-size:.75rem;color:var(--sub);margin-bottom:4px">予定内容</div>
+            <textarea aria-label="予定内容">${escapeHtml(item.content)}</textarea>
+          </div>
+          <div class="row">
+            <input type="time" aria-label="開始時刻" value="${escapeHtml(item.start_time)}">
+            <span>〜</span>
+            <input type="time" aria-label="終了時刻" value="${escapeHtml(item.end_time)}">
+          </div>
+          <div class="schedule-actions">
+            <button class="mini primary" data-schedule-act="save">保存</button>
+            <button class="mini danger" data-schedule-act="delete">削除</button>
+          </div>
+        </div>`).join("") : '<p class="schedule-empty">この日の予定はまだありません。</p>';
+    }
+
+    $("schedule-add").addEventListener("click", async () => {
+      const start_time = $("schedule-start").value;
+      const end_time = $("schedule-end").value;
+      const content = $("schedule-content").value.trim();
+      if (!start_time || !end_time || !content) return setMsg("開始・終了時刻と予定内容を入力してください");
+      const r = await api("POST", "/api/schedules", {
+        date: dlgDate, start_time, end_time, content
+      });
+      if (!r.ok) return setMsg(r.data.message || "予定を追加できませんでした");
+      $("schedule-content").value = "";
+      setMsg(r.data.message);
+      await loadSchedules();
+    });
+
+    $("schedule-list").addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-schedule-act]");
+      if (!btn) return;
+      const row = btn.closest("[data-schedule-id]");
+      const id = row.dataset.scheduleId;
+      setMsg("");
+      if (btn.dataset.scheduleAct === "delete") {
+        if (!confirm("この予定を削除しますか？")) return;
+        const r = await api("DELETE", "/api/schedules/" + id);
+        if (!r.ok) return setMsg(r.data.message || "予定を削除できませんでした");
+        await loadSchedules();
+        setMsg(r.data.message);
+        return;
+      }
+      const inputs = row.querySelectorAll('input[type="time"]');
+      const content = row.querySelector("textarea").value.trim();
+      const start_time = inputs[0].value;
+      const end_time = inputs[1].value;
+      if (!start_time || !end_time || !content) return setMsg("開始・終了時刻と予定内容を入力してください");
+      const r = await api("PUT", "/api/schedules/" + id, { start_time, end_time, content });
+      if (!r.ok) return setMsg(r.data.message || "予定を保存できませんでした");
+      await loadSchedules();
+      setMsg(r.data.message);
+    });
+
     async function afterChange() {
       await loadDay();
       if (current === "cal") renderCal();
