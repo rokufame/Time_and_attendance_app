@@ -34,6 +34,25 @@ with get_db() as db:
             time TEXT
         )
     """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS daily_schedule (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS daily_reflections (
+            date TEXT PRIMARY KEY,
+            achievements TEXT NOT NULL DEFAULT '',
+            good_points TEXT NOT NULL DEFAULT '',
+            improvements TEXT NOT NULL DEFAULT '',
+            tomorrow TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+    """)
  
  
 # ---------- 共通の部品 ----------
@@ -246,6 +265,121 @@ def record_item(rid):
     return jsonify(message="保存しました")
  
  
+
+
+# ---------- 日ごとの時間別予定 ----------
+
+# ---------- 日ごとの振り返り ----------
+@app.route("/api/reflection", methods=["GET", "POST"])
+def reflection():
+    if request.method == "GET":
+        date = request.args.get("date", "")
+        if not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", date):
+            return jsonify(message="date は YYYY-MM-DD の形で指定してください"), 400
+        with get_db() as db:
+            row = db.execute(
+                "SELECT achievements, good_points, improvements, tomorrow, updated_at "
+                "FROM daily_reflections WHERE date = ?",
+                (date,),
+            ).fetchone()
+        if not row:
+            return jsonify(reflection={
+                "achievements": "", "good_points": "", "improvements": "",
+                "tomorrow": "", "updated_at": None
+            })
+        return jsonify(reflection={
+            "achievements": row[0], "good_points": row[1],
+            "improvements": row[2], "tomorrow": row[3], "updated_at": row[4]
+        })
+
+    data = request.get_json(silent=True) or {}
+    date = data.get("date", "")
+    fields = ["achievements", "good_points", "improvements", "tomorrow"]
+    if not isinstance(date, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", date):
+        return jsonify(message="date は YYYY-MM-DD の形で指定してください"), 400
+    values = []
+    for field in fields:
+        value = data.get(field, "")
+        if not isinstance(value, str):
+            return jsonify(message="振り返りの内容は文字列で入力してください"), 400
+        values.append(value.strip())
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as db:
+        db.execute("""
+            INSERT INTO daily_reflections
+                (date, achievements, good_points, improvements, tomorrow, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                achievements = excluded.achievements,
+                good_points = excluded.good_points,
+                improvements = excluded.improvements,
+                tomorrow = excluded.tomorrow,
+                updated_at = excluded.updated_at
+        """, (date, *values, updated_at))
+    return jsonify(message="振り返りを保存しました", updated_at=updated_at)
+
+@app.route("/api/schedules", methods=["GET", "POST"])
+def schedules():
+    if request.method == "GET":
+        date = request.args.get("date", "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            return jsonify(message="date は YYYY-MM-DD の形で指定してください"), 400
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT id, start_time, end_time, content FROM daily_schedule "
+                "WHERE date = ? ORDER BY start_time, end_time, id",
+                (date,),
+            ).fetchall()
+        return jsonify(schedules=[
+            {"id": i, "start_time": start, "end_time": end, "content": content}
+            for i, start, end, content in rows
+        ])
+
+    data = request.get_json(silent=True) or {}
+    date = data.get("date", "")
+    start = data.get("start_time", "")
+    end = data.get("end_time", "")
+    content = data.get("content", "").strip() if isinstance(data.get("content", ""), str) else ""
+    if (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date)
+            or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start)
+            or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", end)
+            or start >= end or not content):
+        return jsonify(message="日付・開始時刻・終了時刻・予定内容を正しく入力してください"), 400
+    with get_db() as db:
+        cur = db.execute(
+            "INSERT INTO daily_schedule (date, start_time, end_time, content) VALUES (?, ?, ?, ?)",
+            (date, start, end, content),
+        )
+        schedule_id = cur.lastrowid
+    return jsonify(id=schedule_id, message="予定を追加しました"), 201
+
+
+@app.route("/api/schedules/<int:sid>", methods=["PUT", "DELETE"])
+def schedule_item(sid):
+    with get_db() as db:
+        if request.method == "DELETE":
+            cur = db.execute("DELETE FROM daily_schedule WHERE id = ?", (sid,))
+            if cur.rowcount == 0:
+                return jsonify(message="予定が見つかりません"), 404
+            return jsonify(message="予定を削除しました")
+
+        data = request.get_json(silent=True) or {}
+        start = data.get("start_time", "")
+        end = data.get("end_time", "")
+        content = data.get("content", "").strip() if isinstance(data.get("content", ""), str) else ""
+        if (not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start)
+                or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", end)
+                or start >= end or not content):
+            return jsonify(message="開始時刻・終了時刻・予定内容を正しく入力してください"), 400
+        cur = db.execute(
+            "UPDATE daily_schedule SET start_time = ?, end_time = ?, content = ? WHERE id = ?",
+            (start, end, content, sid),
+        )
+        if cur.rowcount == 0:
+            return jsonify(message="予定が見つかりません"), 404
+    return jsonify(message="予定を保存しました")
+
+
 if __name__ == "__main__":
     app.run(port=3000)
  
